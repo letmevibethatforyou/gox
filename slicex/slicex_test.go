@@ -1,9 +1,13 @@
 package slicex
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestUnique(t *testing.T) {
@@ -244,4 +248,318 @@ func TestGroupComplex(t *testing.T) {
 	if !reflect.DeepEqual(result, expected) {
 		t.Errorf("Group people by age failed: got %v, expected %v", result, expected)
 	}
+}
+
+func TestMapConcurrent(t *testing.T) {
+	t.Run("basic concurrent execution", func(t *testing.T) {
+		input := []int{1, 2, 3, 4, 5}
+
+		mapFunc := func(ctx context.Context, n int) (string, error) {
+			time.Sleep(10 * time.Millisecond) // Simulate work
+			return strconv.Itoa(n * 2), nil
+		}
+
+		vv, err := MapConcurrent(mapFunc).Execute(context.Background(), input)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		expected := []string{"2", "4", "6", "8", "10"}
+		if !reflect.DeepEqual(vv, expected) {
+			t.Errorf("Expected %v, got %v", expected, vv)
+		}
+	})
+
+	t.Run("empty slice", func(t *testing.T) {
+		input := []int{}
+
+		mapFunc := func(ctx context.Context, n int) (string, error) {
+			return strconv.Itoa(n), nil
+		}
+
+		result, err := MapConcurrent(mapFunc).Execute(context.Background(), input)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		if result != nil {
+			t.Errorf("Expected nil mapConcurrentResult for empty input, got %v", result)
+		}
+	})
+
+	t.Run("with custom concurrency", func(t *testing.T) {
+		input := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			time.Sleep(10 * time.Millisecond) // Simulate work
+			return n * n, nil
+		}
+
+		result, err := MapConcurrent(mapFunc).
+			WithConcurrency(3).
+			Execute(context.Background(), input)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		expected := []int{1, 4, 9, 16, 25, 36, 49, 64, 81, 100}
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("Expected %v, got %v", expected, result)
+		}
+	})
+
+	t.Run("stop on first error", func(t *testing.T) {
+		input := []int{1, 2, 3, 4, 5}
+
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			if n == 3 {
+				return 0, errors.New("error at 3")
+			}
+			time.Sleep(50 * time.Millisecond) // Simulate work
+			return n * 2, nil
+		}
+
+		result, err := MapConcurrent(mapFunc).
+			WithStopOnError(true).
+			Execute(context.Background(), input)
+
+		if err == nil {
+			t.Fatal("Expected error but got none")
+		}
+
+		if err.Error() != "error at 3" {
+			t.Errorf("Expected 'error at 3', got '%v'", err)
+		}
+
+		// Result should be nil when there's an error
+		if result != nil {
+			t.Errorf("Expected nil mapConcurrentResult when error occurs, got %v", result)
+		}
+	})
+
+	t.Run("continue on error", func(t *testing.T) {
+		input := []int{1, 2, 3, 4, 5}
+
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			if n == 3 || n == 4 {
+				return 0, errors.New("error at " + strconv.Itoa(n))
+			}
+			return n * 2, nil
+		}
+
+		result, err := MapConcurrent(mapFunc).
+			WithStopOnError(false).
+			Execute(context.Background(), input)
+
+		if err == nil {
+			t.Fatal("Expected error but got none")
+		}
+
+		// Result should be nil when there's an error
+		if result != nil {
+			t.Errorf("Expected nil mapConcurrentResult when error occurs, got %v", result)
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		input := []int{1, 2, 3, 4, 5}
+
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+				return n * 2, nil
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		result, err := MapConcurrent(mapFunc).Execute(ctx, input)
+
+		if err == nil {
+			t.Fatal("Expected context cancellation error but got none")
+		}
+
+		// Result should be nil when there's an error (including cancellation)
+		if result != nil {
+			t.Errorf("Expected nil mapConcurrentResult when context is cancelled, got %v", result)
+		}
+	})
+
+	t.Run("order preservation", func(t *testing.T) {
+		input := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+		mapFunc := func(ctx context.Context, n int) (string, error) {
+			// Add variable delay to test ordering
+			delay := time.Duration((11-n)*10) * time.Millisecond
+			time.Sleep(delay)
+			return "item-" + strconv.Itoa(n), nil
+		}
+
+		result, err := MapConcurrent(mapFunc).
+			WithConcurrency(5).
+			Execute(context.Background(), input)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		expected := []string{
+			"item-1", "item-2", "item-3", "item-4", "item-5",
+			"item-6", "item-7", "item-8", "item-9", "item-10",
+		}
+
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("Order not preserved. Expected %v, got %v", expected, result)
+		}
+	})
+}
+
+func TestMapConcurrentWorkerPool(t *testing.T) {
+	t.Run("worker pool uses minimum of concurrency and slice length", func(t *testing.T) {
+		// Test with slice smaller than concurrency
+		smallInput := []int{1, 2}
+		concurrentCount := 0
+		maxConcurrent := 0
+		var mu sync.Mutex
+
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			mu.Lock()
+			concurrentCount++
+			if concurrentCount > maxConcurrent {
+				maxConcurrent = concurrentCount
+			}
+			mu.Unlock()
+
+			time.Sleep(50 * time.Millisecond) // Hold the worker for a bit
+
+			mu.Lock()
+			concurrentCount--
+			mu.Unlock()
+
+			return n * 2, nil
+		}
+
+		result, err := MapConcurrent(mapFunc).
+			WithConcurrency(8). // Much higher than slice length
+			Execute(context.Background(), smallInput)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		expected := []int{2, 4}
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("Expected %v, got %v", expected, result)
+		}
+
+		// Should only use 2 workers max (slice length), not 8
+		if maxConcurrent > len(smallInput) {
+			t.Errorf("Expected max %d concurrent workers, but saw %d", len(smallInput), maxConcurrent)
+		}
+
+		// Should have used exactly the slice length as worker count
+		if maxConcurrent != len(smallInput) {
+			t.Errorf("Expected exactly %d concurrent workers, but saw %d", len(smallInput), maxConcurrent)
+		}
+	})
+
+	t.Run("worker pool respects concurrency limit for large slices", func(t *testing.T) {
+		// Test with slice larger than concurrency
+		largeInput := make([]int, 20)
+		for i := range largeInput {
+			largeInput[i] = i + 1
+		}
+
+		concurrentCount := 0
+		maxConcurrent := 0
+		var mu sync.Mutex
+
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			mu.Lock()
+			concurrentCount++
+			if concurrentCount > maxConcurrent {
+				maxConcurrent = concurrentCount
+			}
+			mu.Unlock()
+
+			time.Sleep(20 * time.Millisecond) // Hold the worker for a bit
+
+			mu.Lock()
+			concurrentCount--
+			mu.Unlock()
+
+			return n * 2, nil
+		}
+
+		concurrencyLimit := 3
+		result, err := MapConcurrent(mapFunc).
+			WithConcurrency(concurrencyLimit).
+			Execute(context.Background(), largeInput)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		// Verify all results are correct
+		if len(result) != len(largeInput) {
+			t.Errorf("Expected mapConcurrentResult length %d, got %d", len(largeInput), len(result))
+		}
+
+		// Should never exceed concurrency limit
+		if maxConcurrent > concurrencyLimit {
+			t.Errorf("Expected max %d concurrent workers, but saw %d", concurrencyLimit, maxConcurrent)
+		}
+
+		// Should have used exactly the concurrency limit
+		if maxConcurrent != concurrencyLimit {
+			t.Errorf("Expected exactly %d concurrent workers, but saw %d", concurrencyLimit, maxConcurrent)
+		}
+	})
+}
+
+func TestMapConcurrentFluentAPI(t *testing.T) {
+	t.Run("method chaining", func(t *testing.T) {
+		input := []int{1, 2, 3, 4, 5}
+
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			return n * 3, nil
+		}
+
+		result, err := MapConcurrent(mapFunc).
+			WithConcurrency(2).
+			WithStopOnError(false).
+			Execute(context.Background(), input)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		expected := []int{3, 6, 9, 12, 15}
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("Expected %v, got %v", expected, result)
+		}
+	})
+
+	t.Run("default configuration", func(t *testing.T) {
+		mapFunc := func(ctx context.Context, n int) (int, error) {
+			return n + 10, nil
+		}
+
+		handler := MapConcurrent(mapFunc)
+
+		// Check defaults
+		if handler.concurrency != 8 {
+			t.Errorf("Expected default concurrency 8, got %d", handler.concurrency)
+		}
+
+		if !handler.stopOnError {
+			t.Error("Expected default stopOnError to be true")
+		}
+	})
 }
