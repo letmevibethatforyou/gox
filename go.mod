@@ -1,5 +1,5 @@
 module github.com/letmevibethatforyou/gox
 
-go 1.24.5
+go 1.24
 
 require github.com/segmentio/ksuid v1.0.4 // indirect
