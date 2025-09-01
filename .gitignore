@@ -4,6 +4,9 @@
 *.ipr
 *.iws
 
+# ignore generated content
+coverage.*
+
 # Default ignored files
 /shelf/
 /.idea/workspace.xml
