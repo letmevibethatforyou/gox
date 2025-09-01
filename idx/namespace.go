@@ -1,3 +1,6 @@
+// Copyright (c) 2025 letmevibethatforyou
+// SPDX-License-Identifier: MIT
+
 package idx
 
 import (

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 letmevibethatforyou
+// SPDX-License-Identifier: MIT
+
 // Package slicex provides utility functions for slice operations with generics support.
 package slicex
 

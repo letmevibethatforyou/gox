@@ -1,3 +1,6 @@
+// Copyright (c) 2025 letmevibethatforyou
+// SPDX-License-Identifier: MIT
+
 // Package idx provides AWS-style identifiers with flexible object ID generation.
 //
 // The package implements a namespace-based ID system where IDs follow the format:
